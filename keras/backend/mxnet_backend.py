@@ -104,7 +104,13 @@ def min(x, axis=None, keepdims=False):
 def sum(x, axis=None, keepdims=False):
     '''Sum of the values in a tensor, alongside the specified axis.
     '''
-    return mx.ndarray.sum(x, axis=axis, keepdims=keepdims)
+    if isinstance(x, mx.ndarray.NDArray):
+        if(axis == None):
+            return mx.ndarray.sum(x)
+        else:
+            return mx.ndarray.sum(x, axis=axis, keepdims=keepdims)
+    else :
+        return mx.symbol.sum(x)
 
 def argmax(x, axis=None, keepdims=False):
     '''Minimum value in a tensor.
@@ -117,10 +123,10 @@ def argmax(x, axis=None, keepdims=False):
 def argmin(x, axis=None, keepdims=False):
     '''Minimum value in a tensor.
     '''
-    if(axis==None) :
-        return mx.ndarray.argmin(x, keepdims=keepdims);
-    else :
-        return mx.ndarray.argmin(x, axis=axis, keepdims=keepdims)
+    #if(axis==None) :
+    #    return mx.ndarray.argmin(x, keepdims=keepdims);
+    #else :
+    return mx.ndarray.argmin(x, axis=axis, keepdims=keepdims)
 
 def square(x):
     '''Element-wise square .
@@ -142,7 +148,10 @@ def sqrt(x):
 def exp(x):
     '''Element-wise exponential.
     '''
-    return mx.ndarray.exp(x)
+    if isinstance(x, mx.ndarray.NDArray):
+        return mx.ndarray.exp(x)
+    else :
+        return mx.symbol.exp(x)
 
 
 def log(x):
@@ -233,6 +242,11 @@ def cos(x):
     '''
     return mx.ndarray.cos(x)
 
+def clip(x, min_value, max_value):
+    '''Element-wise value clipping.
+    '''
+    return mx.ndarray.clip(x,min_value, max_value)
+
 # SHAPE OPERATIONS
 
 def concatenate(tensors, axis=-1):
@@ -258,7 +272,14 @@ def permute_dimensions(x, pattern):
         pattern: should be a tuple of
             dimension indices, e.g. (0, 2, 1).
     '''
-    return x.transpose(x, axes=pattern)
+    return mx.ndarray.transpose(x, axes=pattern)
+
+def flatten(x):
+    A = mx.symbol.Variable('A')
+    C = mx.symbol.Flatten(A)
+    executor = C.bind(ctx=mx.current_context(), args={'A':x})
+    executor.forward()
+    return transpose(executor.outputs[0])
 
 def expand_dims(x, dim=-1):
     '''Adds a 1-sized dimension at index "dim".
@@ -376,6 +397,27 @@ def softplus(x):
     executor.forward()
     return executor.outputs[0]
 
+def dropout(x, level):
+    '''Sets entries in `x` to zero at random,
+    while scaling the entire tensor.
+
+    # Arguments
+        x: tensor
+        level: fraction of the entries in the tensor
+            that will be set to 0.
+    '''
+
+    A = mx.symbol.Variable('A')
+    C = mx.symbol.Dropout(data=A, p=level)
+    executor = C.bind(ctx=mx.current_context(), args={'A':x})
+    executor.forward()
+    return executor.outputs[0]
+
+def l2_normalize(x):
+    '''Normalizes a tensor wrt the L2 norm alongside the specified axis.
+    '''
+    return mx.ndarray.norm(x)
+
 # GRAPH MANIPULATION
 
 class Function(object):
@@ -401,6 +443,202 @@ def function(inputs, outputs, updates=[], **kwargs):
     return Function(inputs, outputs, updates=updates, **kwargs)
 
 
+
+def gradients(loss, variables):
+    return loss.grad([variables[0].name])
+
+
+def stop_gradient(variables):
+    '''Returns `variables` but with zero gradient with respect to every other
+    variables.
+    '''
+    return theano.gradient.disconnected_grad(variables)
+
+
+# CONVOLUTIONS
+
+def _preprocess_conv2d_input(x, dim_ordering):
+    if dim_ordering == 'tf':
+        # TF uses the last dimension as channel dimension,
+        # instead of the 2nd one.
+        # TH input shape: (samples, input_depth, rows, cols)
+        # TF input shape: (samples, rows, cols, input_depth)
+        x = mx.ndarray.transpose(x,(0, 3, 1, 2))
+    return x
+
+def _preprocess_conv3d_input(x, dim_ordering):
+    if dim_ordering == 'tf':
+        # TF uses the last dimension as channel dimension,
+        # instead of the 2nd one.
+        # TH input shape: (samples, input_depth, rows, cols, slices)
+        # TF input shape: (samples, rows, cols, slices, input_depth)
+        x = mx.ndarray.transpose(x,(0, 4, 1, 2, 3))
+    return x
+
+def _preprocess_conv2d_kernel(kernel, dim_ordering):
+    if dim_ordering == 'tf':
+        # TF uses the last dimension as channel dimension,
+        # instead of the 2nd one.
+        # TH kernel shape: (depth, input_depth, rows, cols)
+        # TF kernel shape: (rows, cols, input_depth, depth)
+        kernel = mx.ndarray.transpose(kernel, (3, 2, 0, 1))
+    return kernel
+
+def _preprocess_conv3d_kernel(kernel, dim_ordering):
+    if dim_ordering == 'tf':
+        # TF uses the last dimension as channel dimension,
+        # instead of the 2nd one.
+        # TH kernel shape: (depth, input_depth, rows, cols, slices)
+        # TF kernel shape: (rows, cols, slices, input_depth, depth)
+        kernel = mx.ndarray.transpose(kernel,(4, 3, 0, 1, 2))
+    return kernel
+
+def _preprocess_border_mode(border_mode):
+    if border_mode == 'same':
+        padding = 'SAME'
+    elif border_mode == 'valid':
+        padding = 'VALID'
+    else:
+        raise Exception('Invalid border mode: ' + str(border_mode))
+    return padding
+
+def _postprocess_conv2d_output(x, dim_ordering):
+    if dim_ordering == 'tf':
+        x = mx.ndarray.transpose(x,(0, 2, 3, 1))
+    return x
+
+def _postprocess_conv3d_output(x, dim_ordering):
+    if dim_ordering == 'tf':
+        x = mx.ndarray.transpose(x,(0, 2, 3, 4, 1))
+    return x
+
+def conv2d(x, kernel, strides=(1, 1), border_mode='valid',
+           dim_ordering='default',
+           image_shape=None, filter_shape=None, filter_dilation=(1, 1)):
+    '''2D convolution.
+
+    # Arguments
+        kernel: kernel tensor.
+        strides: strides tuple.
+        border_mode: string, "same" or "valid".
+        dim_ordering: "tf" or "th".
+            Whether to use Theano or TensorFlow dimension ordering
+            for inputs/kernels/ouputs.
+    '''
+    if dim_ordering == 'default':
+        dim_ordering = image_dim_ordering()
+    if dim_ordering not in {'th', 'tf'}:
+        raise ValueError('Unknown dim_ordering ' + str(dim_ordering))
+
+    x = _preprocess_conv2d_input(x, dim_ordering)
+    kernel = _preprocess_conv2d_kernel(kernel, dim_ordering)
+    padding = _preprocess_border_mode(border_mode)
+
+    data = mx.sym.Variable(name="data")
+    shp = (kernel.shape[2], kernel.shape[3])
+    if filter_dilation == (1, 1):
+        #strides = (1,) + strides + (1,)
+        #x = tf.nn.conv2d(x, kernel, strides, padding=padding)
+        conv = mx.sym.Convolution(data=data, kernel=shp, no_bias=True, num_filter=kernel.shape[0], stride=strides, name = "conv")
+    else:
+        assert filter_dilation[0] == filter_dilation[1]
+        assert strides == (1, 1), 'Invalid strides for dilated convolution'
+        #x = tf.nn.atrous_conv2d(x, kernel, filter_dilation[0], padding=padding)
+        conv = mx.sym.Convolution(data=data, kernel=shp, no_bias=True, num_filter=kernel.shape[0], name = "conv")
+
+    executor = conv.bind(ctx=mx.current_context(), args={'data':x, 'conv_weight':kernel})
+    executor.forward()
+    y = executor.outputs[0]
+    return _postprocess_conv2d_output(y, dim_ordering)
+
+def conv3d(x, kernel, strides=(1, 1, 1),
+           border_mode='valid', dim_ordering='default',
+           volume_shape=None, filter_shape=None):
+    '''3D convolution.
+
+    # Arguments
+        kernel: kernel tensor.
+        strides: strides tuple.
+        border_mode: string, "same" or "valid".
+        dim_ordering: "tf" or "th".
+            Whether to use Theano or TensorFlow dimension ordering
+            for inputs/kernels/ouputs.
+    '''
+    if dim_ordering == 'default':
+        dim_ordering = image_dim_ordering()
+    if dim_ordering not in {'th', 'tf'}:
+        raise ValueError('Unknown dim_ordering ' + str(dim_ordering))
+
+    x = _preprocess_conv3d_input(x, dim_ordering)
+    kernel = _preprocess_conv3d_kernel(kernel, dim_ordering)
+    padding = _preprocess_border_mode(border_mode)
+
+    data = mx.sym.Variable(name="data")
+    shp = (kernel.shape[2], kernel.shape[3], kernel.shape[4])
+    conv = mx.sym.Convolution(data=data, kernel=shp, no_bias=True, num_filter=kernel.shape[0], stride=strides,
+                              name="conv")
+    executor = conv.bind(ctx=mx.current_context(), args={'data': x, 'conv_weight': kernel})
+    executor.forward()
+    y = executor.outputs[0]
+
+    return _postprocess_conv3d_output(y, dim_ordering)
+
+def pool2d(x, pool_size, strides=(1, 1),
+           border_mode='valid', dim_ordering='default',
+           pool_mode='max'):
+    '''2D Pooling.
+
+    # Arguments
+        pool_size: tuple of 2 integers.
+        strides: tuple of 2 integers.
+        border_mode: one of "valid", "same".
+        dim_ordering: one of "th", "tf".
+        pool_mode: one of "max", "avg".
+    '''
+    if dim_ordering == 'default':
+        dim_ordering = image_dim_ordering()
+    if dim_ordering not in {'th', 'tf'}:
+        raise ValueError('Unknown dim_ordering ' + str(dim_ordering))
+
+    padding = _preprocess_border_mode(border_mode)
+    x = _preprocess_conv2d_input(x, dim_ordering)
+
+    data = mx.sym.Variable(name="data")
+    pool = mx.sym.Pooling(data=data, kernel=pool_size, pool_type=pool_mode, stride=strides, name = "pool")
+
+    executor = pool.bind(ctx=mx.current_context(), args={'data':x})
+    executor.forward()
+    y = executor.outputs[0]
+
+    return _postprocess_conv2d_output(y, dim_ordering)
+
+def pool3d(x, pool_size, strides=(1, 1, 1), border_mode='valid',
+           dim_ordering='default', pool_mode='max'):
+    '''3D Pooling.
+
+    # Arguments
+        pool_size: tuple of 3 integers.
+        strides: tuple of 3 integers.
+        border_mode: one of "valid", "same".
+        dim_ordering: one of "th", "tf".
+        pool_mode: one of "max", "avg".
+    '''
+    if dim_ordering == 'default':
+        dim_ordering = image_dim_ordering()
+    if dim_ordering not in {'th', 'tf'}:
+        raise ValueError('Unknown dim_ordering ' + str(dim_ordering))
+
+    padding = _preprocess_border_mode(border_mode)
+    x = _preprocess_conv3d_input(x, dim_ordering)
+
+    data = mx.sym.Variable(name="data")
+    pool = mx.sym.Pooling(data=data, kernel=pool_size, pool_type=pool_mode, stride=strides, name = "pool")
+
+    executor = pool.bind(ctx=mx.current_context(), args={'data':x})
+    executor.forward()
+    y = executor.outputs[0]
+
+    return _postprocess_conv3d_output(y, dim_ordering)
 
 # RANDOMNESS
 
@@ -428,3 +666,65 @@ def random_binomial(shape, p=0.0, dtype=_FLOATX, seed=None):
     return a
 
 # HIGH ORDER FUNCTIONS
+
+def map_fn(fn, elems, name=None):
+    '''Map the function fn over the elements elems and return the outputs.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems
+        elems: tensor
+        name: A string name for the map node in the graph
+
+    # Returns
+        Tensor with first dimension equal to the elems and second depending on
+        fn
+    '''
+    y = fn(mx.ndarray.array(elems), axis=1)
+    return y;
+
+def foldl(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from left to right.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[0] in case of None)
+        name: A string name for the foldl node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    arr = mx.ndarray.array(elems)
+    shape = arr.shape
+    result = arr[0]
+    if(initializer != None):
+        result = fn(initializer, result)
+    for i in range(1, shape[0]):
+        result = fn(result, arr[i])
+    return result
+
+def foldr(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from right to left.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[-1] in case of None)
+        name: A string name for the foldr node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    arr = mx.ndarray.array(elems)
+    shape = arr.shape
+    # TODO: Some bug in MXNET, the following doesn't work.
+    # Rigght now it give incorrect result, the for loop has to end at -1(instead of zero)
+    #result = arr[shape[0]-1]
+    result = arr[0]
+    if(initializer != None):
+        result = fn(initializer, result)
+    for i in range(shape[0]-1, 0, -1):
+        result = fn(result, arr[i])
+    return result

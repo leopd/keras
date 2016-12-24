@@ -70,7 +70,7 @@ class TestBackend(object):
 
         #check_two_tensor_operation('batch_dot', (4, 2, 3), (4, 5, 3),
         #                           axes=(2, 2))
-       # check_single_tensor_operation('transpose', (4, 2))
+        check_single_tensor_operation('transpose', (4, 2))
         #check_single_tensor_operation('reverse', (4, 3, 2), axes=1)
         #check_single_tensor_operation('reverse', (4, 3, 2), axes=(1, 2))
 
@@ -88,8 +88,8 @@ class TestBackend(object):
         assert_allclose(zth, ztf, atol=1e-05)
 
         check_single_tensor_operation('reshape', (4, 2), shape=(8, 1))
-        #check_single_tensor_operation('permute_dimensions', (4, 2, 3),
-        #                              pattern=(2, 0, 1))
+        check_single_tensor_operation('permute_dimensions', (4, 2, 3),
+                                      pattern=(2, 0, 1))
         #check_single_tensor_operation('repeat', (4, 1), n=3)
         #check_single_tensor_operation('flatten', (4, 1))
         check_single_tensor_operation('expand_dims', (4, 3), dim=-1)
@@ -163,11 +163,11 @@ class TestBackend(object):
         # check_single_tensor_operation('any', (4, 2))
         # check_single_tensor_operation('any', (4, 2), axis=1, keepdims=True)
 '''
-        #check_single_tensor_operation('argmax', (4, 2))
-        #check_single_tensor_operation('argmax', (4, 2), axis=1)
+        #check_single_tensor_operation('argmax', (4, 2)) #Global reduction not yet supported
+        check_single_tensor_operation('argmax', (4, 2), axis=1)
 
-        #check_single_tensor_operation('argmin', (4, 2))
-        #check_single_tensor_operation('argmin', (4, 2), axis=1)
+        #check_single_tensor_operation('argmin', (4, 2)) #Global reduction not yet supported
+        check_single_tensor_operation('argmin', (4, 2), axis=1)
 
         check_single_tensor_operation('square', (4, 2))
         check_single_tensor_operation('abs', (4, 2))
@@ -177,8 +177,7 @@ class TestBackend(object):
         check_single_tensor_operation('round', (4, 2))
         check_single_tensor_operation('sign', (4, 2))
         check_single_tensor_operation('pow', (4, 2), a=3)
-        #check_single_tensor_operation('clip', (4, 2), min_value=0.4,
-        #                              max_value=0.6)
+        check_single_tensor_operation('clip', (4, 2), min_value=0.4, max_value=0.6)
 
         # two-tensor ops
         check_two_tensor_operation('equal', (4, 2), (4, 2))
@@ -190,6 +189,115 @@ class TestBackend(object):
         check_two_tensor_operation('maximum', (4, 2), (4, 2))
         check_two_tensor_operation('minimum', (4, 2), (4, 2))
 
+    def test_conv2d(self):
+        # TH kernel shape: (depth, input_depth, rows, cols)
+        # TF kernel shape: (rows, cols, input_depth, depth)
+
+        for input_shape in [(2, 3, 4, 5), (2, 3, 5, 6)]:
+            for kernel_shape in [(4, 3, 2, 2), (4, 3, 3, 4)]:
+                xval = np.random.random(input_shape)
+
+                xth = KTH.variable(xval)
+                xtf = KTF.variable(xval)
+
+                kernel_val = np.random.random(kernel_shape) - 0.5
+
+                kernel_th = KTH.variable(convert_kernel(kernel_val, dim_ordering='th'))
+                kernel_tf = KTF.variable(kernel_val)
+
+                zth = KTH.eval(KTH.conv2d(xth, kernel_th, dim_ordering='th'))
+                ztf = KTF.eval(KTF.conv2d(xtf, kernel_tf, dim_ordering='th'))
+
+                assert zth.shape == ztf.shape
+                assert_allclose(zth, ztf, atol=1e-05)
+
+        input_shape = (1, 6, 5, 3)
+        kernel_shape = (3, 3, 3, 2)
+
+        xval = np.random.random(input_shape)
+
+        xth = KTH.variable(xval)
+        xtf = KTF.variable(xval)
+
+        kernel_val = np.random.random(kernel_shape) - 0.5
+
+        kernel_th = KTH.variable(convert_kernel(kernel_val, dim_ordering='tf'))
+        kernel_tf = KTF.variable(kernel_val)
+
+        zth = KTH.eval(KTH.conv2d(xth, kernel_th, dim_ordering='tf'))
+        ztf = KTF.eval(KTF.conv2d(xtf, kernel_tf, dim_ordering='tf'))
+
+        assert zth.shape == ztf.shape
+        assert_allclose(zth, ztf, atol=1e-05)
+
+    @pytest.mark.skip(reason="MXNET missing support for 3D Convolution: https://github.com/dmlc/mxnet/issues/4301 ")
+    def test_conv3d(self):
+        # TH input shape: (samples, input_depth, conv_dim1, conv_dim2, conv_dim3)
+        # TF input shape: (samples, conv_dim1, conv_dim2, conv_dim3, input_depth)
+        # TH kernel shape: (depth, input_depth, x, y, z)
+        # TF kernel shape: (x, y, z, input_depth, depth)
+
+        # test in dim_ordering = th
+        for input_shape in [(2, 3, 4, 5, 4), (2, 3, 5, 4, 6)]:
+            for kernel_shape in [(4, 3, 2, 2, 2), (4, 3, 3, 2, 4)]:
+                xval = np.random.random(input_shape)
+
+                xth = KTH.variable(xval)
+                xtf = KTF.variable(xval)
+
+                kernel_val = np.random.random(kernel_shape) - 0.5
+
+                kernel_th = KTH.variable(convert_kernel(kernel_val, dim_ordering='th'))
+                kernel_tf = KTF.variable(kernel_val)
+
+                zth = KTH.eval(KTH.conv3d(xth, kernel_th, dim_ordering='th'))
+                ztf = KTF.eval(KTF.conv3d(xtf, kernel_tf, dim_ordering='th'))
+
+                assert zth.shape == ztf.shape
+                assert_allclose(zth, ztf, atol=1e-05)
+
+        # test in dim_ordering = tf
+        input_shape = (1, 2, 2, 2, 1)
+        kernel_shape = (2, 2, 2, 1, 1)
+
+        xval = np.random.random(input_shape)
+
+        xth = KTH.variable(xval)
+        xtf = KTF.variable(xval)
+
+        kernel_val = np.random.random(kernel_shape) - 0.5
+
+        kernel_th = KTH.variable(convert_kernel(kernel_val, dim_ordering='tf'))
+        kernel_tf = KTF.variable(kernel_val)
+
+        zth = KTH.eval(KTH.conv3d(xth, kernel_th, dim_ordering='tf'))
+        ztf = KTF.eval(KTF.conv3d(xtf, kernel_tf, dim_ordering='tf'))
+
+        assert zth.shape == ztf.shape
+        assert_allclose(zth, ztf, atol=1e-05)
+
+    def test_pool2d(self):
+        check_single_tensor_operation('pool2d', (5, 10, 12, 3), pool_size=(2, 2),
+                                      strides=(1, 1), border_mode='valid')
+
+        check_single_tensor_operation('pool2d', (5, 9, 11, 3), pool_size=(2, 2),
+                                      strides=(1, 1), border_mode='valid')
+
+        check_single_tensor_operation('pool2d', (5, 9, 11, 3), pool_size=(2, 3),
+                                      strides=(1, 1), border_mode='valid')
+
+    @pytest.mark.skip(reason="MXNET missing support for 3D Pooling. '3D kernel not implemented' error ")
+    def test_pool3d(self):
+        check_single_tensor_operation('pool3d', (5, 10, 12, 5, 3), pool_size=(2, 2, 2),
+                                      strides=(1, 1, 1), border_mode='valid')
+
+        check_single_tensor_operation('pool3d', (5, 9, 11, 5, 3), pool_size=(2, 2, 2),
+                                      strides=(1, 1, 1), border_mode='valid')
+
+        check_single_tensor_operation('pool3d', (5, 9, 11, 5, 3), pool_size=(2, 3, 2),
+                                      strides=(1, 1, 1), border_mode='valid')
+
+
     def test_nn_operations(self):
         check_single_tensor_operation('relu', (4, 2), alpha=0.1, max_value=0.5)
         check_single_tensor_operation('softmax', (4, 10))
@@ -200,7 +308,6 @@ class TestBackend(object):
        # check_single_tensor_operation('hard_sigmoid', (4, 2))
         check_single_tensor_operation('tanh', (4, 2))
 
-        '''
         # dropout
         val = np.random.random((100, 100))
         xth = KTH.variable(val)
@@ -211,6 +318,7 @@ class TestBackend(object):
         # dropout patterns are different, only check mean
         assert np.abs(zth.mean() - ztf.mean()) < 0.05
 
+        '''
         check_two_tensor_operation('binary_crossentropy', (4, 2), (4, 2), from_logits=True)
         check_two_tensor_operation('categorical_crossentropy', (4, 2), (4, 2), from_logits=True)
         check_two_tensor_operation('binary_crossentropy', (4, 2), (4, 2), from_logits=False)
@@ -316,6 +424,35 @@ class TestBackend(object):
 
             assert k_s_d.shape == k_d.shape
             assert_allclose(k_s_d, k_d, atol=1e-05)
+
+    def test_map(self):
+        x = np.random.rand(10, 3).astype(np.float32)
+        for K in [KTF, KTH]:
+            kx = K.eval(K.map_fn(K.sum, x))
+
+            assert (10,) == kx.shape
+            assert_allclose(x.sum(axis=1), kx, atol=1e-05)
+
+    def test_foldl(self):
+        x = np.random.rand(10, 3).astype(np.float32)
+        for K in [KTF, KTH]:
+            kx = K.eval(K.foldl(lambda a, b: a+b, x))
+
+            assert (3,) == kx.shape
+            assert_allclose(x.sum(axis=0), kx, atol=1e-05)
+
+    def test_foldr(self):
+        # This test aims to make sure that we walk the array from right to left
+        # and checks it in the following way: multiplying left to right 1e-40
+        # cannot be held into a float32 so it causes an underflow while from
+        # right to left we have no such problem and the result is larger
+        x = np.array([1e-20, 1e-20, 10, 10, 10], dtype=np.float32)
+        for K in [KTF, KTH]:
+            p1 = K.eval(K.foldl(lambda a, b: a*b, x))
+            p2 = K.eval(K.foldr(lambda a, b: a*b, x))
+
+            assert p1 < p2
+            assert 9e-38 < p2 <= 1e-37
 
 if __name__ == '__main__':
     pytest.main([__file__])
